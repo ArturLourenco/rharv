@@ -4,7 +4,7 @@ pkgdown_sha: ~
 articles:
   analysis-and-sizing: analysis-and-sizing.html
   ifpb-pi-case-study: ifpb-pi-case-study.html
-last_built: 2026-07-23T23:47Z
+last_built: 2026-07-23T23:49Z
 urls:
   reference: https://arturlourenco.github.io/rharv/reference
   article: https://arturlourenco.github.io/rharv/articles

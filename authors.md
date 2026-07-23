@@ -7,7 +7,7 @@
 ## Citation
 
 Source:
-[`DESCRIPTION`](https://github.com/ArturLourenco/rharv/blob/main/DESCRIPTION)
+[`DESCRIPTION`](https://github.com/ArturLourenco/rharv/blob/v0.3.0/DESCRIPTION)
 
 Goncalves Lourenco A (2026). *rharv: Daily Water-Balance Simulation of
 Rainwater Harvesting Systems*. R package version 0.3.0,
