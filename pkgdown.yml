@@ -1,0 +1,10 @@
+pandoc: 3.8.3
+pkgdown: 2.2.1
+pkgdown_sha: ~
+articles:
+  analysis-and-sizing: analysis-and-sizing.html
+  ifpb-pi-case-study: ifpb-pi-case-study.html
+last_built: 2026-07-23T23:47Z
+urls:
+  reference: https://arturlourenco.github.io/rharv/reference
+  article: https://arturlourenco.github.io/rharv/articles
