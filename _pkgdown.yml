@@ -1,0 +1,57 @@
+url: https://arturlourenco.github.io/rharv
+
+template:
+  bootstrap: 5
+  math-rendering: mathjax
+
+reference:
+- title: Available volume and simulation
+  desc: Captured-volume relation and the daily water-balance engine.
+  contents:
+  - rh_available_volume
+  - rh_simulate
+- title: Metrics
+  contents:
+  - rh_metrics
+- title: Sizing
+  desc: Guarantee-based sizing of demand, capacity and area.
+  contents:
+  - rh_sizing
+- title: Analysis
+  desc: Parameter sweeps, grids, frontiers, variability and scenarios.
+  contents:
+  - rh_sweep
+  - rh_grid
+  - rh_guarantee_curve
+  - rh_size_for
+  - rh_iso_curve
+  - rh_resource_curve
+  - rh_series_spread
+  - rh_seasonal_demand
+  - rh_scenarios_from_years
+  - rh_compare
+- title: Demand
+  contents:
+  - rh_daily_demand
+- title: Plots
+  contents:
+  - autoplot.rharv_sim
+  - rh_plot_climatology
+  - rh_plot_tradeoff
+  - rh_plot_levers
+  - rh_plot_syr
+  - rh_plot_design_curve
+  - rh_plot_iso
+  - rh_plot_resource_curve
+  - rh_plot_behaviour
+  - rh_plot_monthly_balance
+  - rh_plot_failure_calendar
+  - rh_plot_spread
+- title: Interactive app
+  contents:
+  - rh_explore
+  - rh_demo
+- title: Datasets
+  contents:
+  - precip_pi
+  - areas_pi

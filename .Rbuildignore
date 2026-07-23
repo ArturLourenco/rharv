@@ -1,0 +1,11 @@
+^rharv\.Rproj$
+^\.Rproj\.user$
+^data-raw$
+^paper$
+^\.github$
+^_pkgdown\.yml$
+^docs$
+^pkgdown$
+^README\.Rmd$
+^README\.pt-BR\.md$
+^.*\.Rhistory$

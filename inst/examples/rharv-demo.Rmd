@@ -1,0 +1,636 @@
+---
+title: "rharv: fundamentos do balanço hídrico diário e demonstração completa"
+subtitle: "Estudo de caso do campus IFPB Princesa Isabel, semiárido paraibano"
+author: "Pacote rharv"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    df_print: paged
+    fig_caption: true
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, collapse = TRUE, comment = "#>",
+  fig.width = 8, fig.height = 4.5, warning = FALSE, message = FALSE
+)
+```
+
+> Abra no RStudio com `rharv::rh_demo()` e use Knit, ou rode os chunks um a um.
+> Os gráficos usam o ggplot2.
+
+```{r load}
+library(rharv)
+library(ggplot2)
+```
+
+# O problema e o modelo
+
+Um sistema de aproveitamento de água de chuva (SAAC) tem três componentes que
+interagem: a área de captação $A$ (telhados), o reservatório de capacidade $V$ e
+a demanda $D$. A pergunta de projeto é sempre alguma variação de "com esta
+chuva, esta área e este reservatório, que fração da demanda consigo atender?" e,
+invertendo, "quanto telhado ou tanque preciso para atender uma meta?".
+
+O rharv responde a essas perguntas com um modelo de balanço hídrico em passo
+diário, o método da simulação: percorre-se a série histórica de chuva dia a dia,
+contabilizando entradas, saídas e o estado do reservatório.
+
+## Volume captável
+
+No dia $t$, o volume que chega ao reservatório é proporcional à chuva e à área:
+
+$$Q_t = \frac{P_t \cdot A \cdot C \cdot \eta}{1000} \quad [\mathrm{m^3}]$$
+
+onde $P_t$ é a precipitação (mm), $A$ a área de captação (m²), $C$ o
+coeficiente de escoamento superficial do telhado (perdas por absorção, respingo
+e molhamento) e $\eta$ a eficiência do sistema de captação (perdas no descarte
+da primeira água, o first flush, e de sólidos). A divisão por 1000 converte
+litros em m³. É a relação de volume disponível consagrada na literatura e
+adotada pela ABNT NBR 15527:2019, que recomenda $\eta = 0{,}85$ na ausência de
+dados do fabricante.
+
+```{r available}
+# tres dias (0, 12 e 30 mm) num telhado de 775,53 m2, C = 0,8 e eta = 0,85
+rh_available_volume(precip = c(0, 12, 30), area = 775.53)
+```
+
+## Balanço do reservatório
+
+O reservatório é um estoque finito: acumula o que entra, fornece o que pode e
+verte o que não cabe. A equação da continuidade, com $S_t$ igual ao volume
+armazenado ao fim do dia $t$, é
+
+$$S_t = S_{t-1} + Q_t - D_t, \qquad 0 \le S_t \le V$$
+
+Os dois limites geram as variáveis de interesse. O vertimento $OV_t$ é a água
+perdida porque o tanque encheu. O déficit $\delta_t$ é a demanda que não pôde
+ser atendida porque o tanque esvaziou, de modo que o volume efetivamente
+fornecido é $Y_t = D_t - \delta_t$.
+
+A evaporação é desprezada, dado que o reservatório é fechado e o passo é diário.
+Por convenção, a simulação começa com o reservatório cheio ($S_0 = V$), hipótese
+clássica do método; o argumento `initial` permite mudá-la.
+
+## A ordem das operações no dia
+
+Dentro de um mesmo dia, vertimento e retirada disputam a água. O rharv oferece
+os dois operadores clássicos da literatura de tanques de chuva (Jenkins et al.,
+1978; Fewkes e Butler, 2000). Em `after_demand`, o padrão, retira-se a demanda
+primeiro e só o excedente verte, o que corresponde ao operador YBS (yield before
+spillage):
+
+$$Y_t = \min(D_t,\ S_{t-1} + Q_t), \qquad S_t = \min(S_{t-1} + Q_t - Y_t,\ V)$$
+
+Em `before_demand`, o tanque verte primeiro e depois atende, operador YAS (yield
+after spillage):
+
+$$S'_t = \min(S_{t-1} + Q_t,\ V), \qquad Y_t = \min(D_t,\ S'_t), \qquad S_t = S'_t - Y_t$$
+
+O YAS verte mais, sendo o conservador dos dois, enquanto o YBS é levemente
+otimista. Com passo diário e reservatório não muito pequeno a diferença é
+modesta (Mitchell, 2007), como se verifica adiante.
+
+# Dados do estudo de caso
+
+O pacote embute a série diária do posto Princesa Isabel (ANA/AESA 738013),
+1912 a 2019, já limpa, com os anos totalmente falhos removidos, e as áreas de
+telhado dos quatro blocos do campus IFPB-PI:
+
+```{r data}
+str(precip_pi)
+areas_pi
+area_total <- sum(areas_pi$area_m2)   # area de captacao total (m2)
+area_total
+```
+
+## Climatologia diária
+
+O heatmap abaixo é a matriz de precipitação: cada célula é a média, ao longo de
+cerca de 106 anos, da chuva daquele dia do calendário, com o dia do mês na
+vertical e o mês na horizontal. Ele agrega todos os anos e expõe o regime, com a
+estação chuvosa de fevereiro a abril nas células escuras e a estiagem de agosto
+a outubro nas células claras.
+
+```{r climatology, fig.cap = "Matriz de precipitação: média de cada dia do ano na série 1912 a 2019."}
+rh_plot_climatology(precip_pi)
+```
+
+O tamanho do reservatório é ditado por esse contraste sazonal, uma vez que ele
+existe para transportar água da estação úmida para a seca.
+
+# Demanda
+
+Para instituições, a demanda diária pode ser estimada como população vezes
+consumo per capita. No ano de referência do campus, 1089 pessoas a 6,03
+L/pessoa/dia:
+
+$$D = \frac{1089 \times 6{,}03}{1000} \approx 6{,}57\ \mathrm{m^3/dia}$$
+
+```{r demand}
+demand <- rh_daily_demand(population = 1089, per_capita_l = 6.03)
+demand
+```
+
+# A simulação
+
+O balanço é rodado na série completa com os parâmetros do estudo original
+($A = 4170$ m², $V = 400$ m³). No estudo, $C$ e $\eta$ foram agrupados num único
+coeficiente 0,85, por isso `runoff = 0.85` e `efficiency = 1`:
+
+```{r simulate}
+sim <- rh_simulate(
+  precip     = precip_pi$value,
+  demand     = demand,
+  area       = area_total,
+  capacity   = 400,
+  runoff     = 0.85,
+  efficiency = 1,
+  initial    = 400          # reservatorio cheio em t = 0
+)
+sim
+```
+
+O objeto guarda a série diária completa, uma linha por dia, com $Q_t$ em
+`captured`, $OV_t$ em `overflow`, $Y_t$ em `supplied`, $\delta_t$ em `deficit` e
+$S_t$ em `storage`, além do resumo de métricas:
+
+```{r s3}
+head(as.data.frame(sim))          # a serie dia a dia
+summary(sim)                      # todas as metricas
+tibble::as_tibble(sim)            # mesma serie, como tibble
+```
+
+## Conservação de massa
+
+Todo modelo de estoque deve fechar o balanço, isto é, o que entrou mais o que
+havia deve igualar o que saiu mais o que sobrou:
+
+$$S_0 + \sum_t Q_t \;=\; S_n + \sum_t Y_t + \sum_t OV_t$$
+
+```{r massbalance}
+s <- sim$summary
+c(entrada = s$captured_total + sim$inputs$initial,
+  saida   = s$final_storage + s$supplied_total + s$overflow_total)
+```
+
+Os dois lados coincidem, a menos de arredondamento de máquina. Esse invariante é
+verificado pela suíte de testes do pacote.
+
+## Comparação entre YAS e YBS
+
+```{r timing}
+a <- rh_simulate(precip_pi$value, demand, area_total, 400,
+                 runoff = 0.85, efficiency = 1, overflow_timing = "after_demand")
+b <- rh_simulate(precip_pi$value, demand, area_total, 400,
+                 runoff = 0.85, efficiency = 1, overflow_timing = "before_demand")
+c(YBS_after_demand  = a$summary$overflow_total,
+  YAS_before_demand = b$summary$overflow_total)
+```
+
+Como prevê a teoria, o operador YAS (`before_demand`) verte mais. A diferença é
+pequena porque o passo é diário e o tanque raramente satura no mesmo dia da
+retirada.
+
+# Métricas de desempenho
+
+Sejam $n$ os dias simulados e $n_f = \#\{t : \delta_t > 0\}$ os dias com falha:
+
+| métrica | definição | leitura |
+|---|---|---|
+| Atendimento (volumétrico) | $G_v = 100\,\dfrac{\sum Y_t}{\sum D_t}$ | porcentagem do volume demandado que foi entregue |
+| Confiabilidade (temporal) | $G_t = 100\left(1 - \dfrac{n_f}{n}\right)$ | porcentagem dos dias sem nenhuma falha |
+| Vertimento total | $\sum OV_t$ | água captada e perdida com o tanque cheio |
+| Déficit total | $\sum \delta_t$ | demanda não atendida |
+| Volume aproveitável | $\sum Q_t - \sum OV_t$ | captado que de fato ficou no sistema |
+
+```{r metrics}
+rh_metrics(sim)
+
+c(atendimento_pct    = rh_attendance(sim),
+  confiabilidade_pct = rh_metrics(sim)$reliability_pct,
+  deficit_total      = rh_deficit_total(sim),
+  vertimento_total   = rh_overflow_total(sim))
+```
+
+O atendimento supera a confiabilidade (cerca de 69% contra 68%) porque, nos dias
+de falha, o sistema ainda entrega parte da demanda; a métrica volumétrica é
+sempre maior ou igual à temporal.
+
+## A fórmula legacy
+
+A chamada `rh_attendance(sim, "legacy")` reproduz a fórmula usada no estudo
+original:
+
+$$G_{leg} = 100\,\frac{\left(\sum Q_t - \sum OV_t\right) + S_0}{\sum D_t + S_n}$$
+
+Pela conservação de massa,
+$\sum Y_t = \left(\sum Q_t - \sum OV_t\right) + S_0 - S_n$. Substituindo,
+$G_{leg}$ coincide com $G_v$ sempre que $S_n = 0$, isto é, quando o reservatório
+termina vazio, o caso típico de séries longas com demanda alta. As duas só
+divergem quando sobra água ao final, pois a fórmula legada dá crédito a essa
+água armazenada que nunca chegou a ser usada. Um exemplo construído onde as duas
+diferem:
+
+```{r legacy}
+# 30 dias secos seguidos de 2 dias de chuva forte; tanque comeca vazio
+p_ex <- c(rep(0, 30), 200, 200)
+s_ex <- rh_simulate(p_ex, demand = 1, area = 100, capacity = 5,
+                    runoff = 0.9, efficiency = 1, initial = 0)
+c(padrao = rh_attendance(s_ex), legacy = rh_attendance(s_ex, "legacy"),
+  sobra_final_m3 = s_ex$summary$final_storage)
+```
+
+O padrão, 6,25%, reflete a operação real, já que nos 30 dias secos quase nada foi
+entregue. O legado, 18,9%, é inflado pelos 5 m³ que ficaram no tanque depois que
+as falhas já tinham ocorrido. Por isso o padrão é o default do pacote.
+
+# Diagnóstico visual do sistema
+
+## Comportamento do reservatório
+
+Cada linha do gráfico é uma coluna da série simulada. A série `storage` é o
+estado $S_t$, o nível do tanque, com rampas descendentes de inclinação constante
+(a demanda fixa de `r round(demand, 2)` m³/dia drenando o estoque) interrompidas
+por saltos para cima nos dias de chuva. A série `captured` é a entrada $Q_t$,
+com picos isolados. A série `deficit` só é diferente de zero quando o storage
+cola no zero, pois a falha é consequência do esvaziamento, e a série `overflow`
+só aparece quando o storage cola na capacidade.
+
+```{r behaviour, fig.cap = "Três primeiros anos: o reservatório enche na estação úmida, esvazia na estiagem e falha quando o armazenamento chega a zero."}
+n3 <- 3 * 365
+sim3 <- rh_simulate(precip_pi$value[1:n3], demand, area_total, 400,
+                    runoff = 0.85, efficiency = 1, initial = 400)
+rh_plot_behaviour(sim3, dates = precip_pi$date[1:n3])
+```
+
+Para uma visão rápida sem datas há também o atalho `plot(sim3)`, equivalente a
+`ggplot2::autoplot(sim3)`, método S3 do objeto.
+
+A leitura de projeto é direta. Se o storage passa meses colado em $V$, vertendo,
+o gargalo está na área ou na demanda. Se passa meses em zero, falta
+armazenamento ou captação.
+
+## Balanço mensal
+
+Somando as componentes por mês do calendário, com todos os anos juntos, vê-se o
+papel sazonal de cada uma: captação concentrada entre fevereiro e abril e
+déficit crescendo ao longo da estiagem, de agosto a dezembro, quando o estoque
+transportado da estação úmida se esgota.
+
+```{r monthly, fig.cap = "Totais mensais das componentes do balanço na série completa."}
+sim_full <- sim
+rh_plot_monthly_balance(sim_full, dates = precip_pi$date)
+```
+
+## Calendário de falhas
+
+Cada linha é um ano, cada coluna um dia do ano, e a cor é o déficit do dia. As
+manchas verticais mostram falhas concentradas na estiagem; faixas horizontais
+inteiras revelam os anos críticos, as secas plurianuais, estrutura que uma média
+anual esconderia.
+
+```{r failcal, fig.cap = "Quando o sistema falha: déficit diário por ano e dia do ano.", fig.height = 5.5}
+rh_plot_failure_calendar(sim_full, dates = precip_pi$date)
+```
+
+## Variabilidade da chuva
+
+A linha é a média da chuva diária de cada ano e a sombra é o intervalo p10 a p90
+dentro do ano. Anos de mesma média podem ter distribuições muito diferentes. A
+falha é produzida pelas sequências secas dentro do ano, cuja duração a lâmina
+anual não registra.
+
+```{r spread, fig.cap = "Espalhamento da chuva por ano: média (linha) e faixa p10 a p90 (sombra)."}
+sp <- rh_series_spread(precip_pi, by = "year")
+head(sp)
+rh_plot_spread(sp)
+```
+
+As colunas `cv` ($\sigma/\mu$) e `wet_days` quantificam o espalhamento: duas
+séries com a mesma lâmina anual e `cv` distintos terão garantias distintas.
+
+# Dimensionamento por garantia
+
+## Monotonicidade e bisseção
+
+Fixadas as demais variáveis, o déficit total $f(x)$ é monótono em cada alavanca:
+não crescente em $V$ e em $A$, já que mais tanque ou telhado nunca piora, e não
+decrescente em $D$. Existe portanto um único limiar onde o déficit zera, e ele
+pode ser achado por bisseção: parte-se de um intervalo $[a,b]$ com viabilidade
+oposta nas pontas e corta-se ao meio até a largura ficar abaixo da tolerância,
+o que consome apenas $\lceil \log_2((b-a)/\varepsilon) \rceil$ simulações.
+
+Há três solucionadores equivalentes no argumento `method`: `"bisection"`, o
+padrão, `"optimize"`, que faz otimização automática com penalidade via
+`stats::optimize`, e `"step"`, a busca incremental que automatiza o método
+clássico de tentativa e erro. Os três concordam.
+
+> Daqui em diante é usado `climatology = TRUE`: a série é colapsada na média de
+> cada dia do ano, 366 valores, antes de simular, cerca de 70 vezes mais rápido.
+> A climatologia suaviza os extremos, pois nela não existem anos secos
+> consecutivos, então as garantias saem mais otimistas que na série completa.
+> Convém explorar com ela e confirmar os números finais na série histórica.
+
+```{r clim}
+md   <- format(precip_pi$date, "%m-%d")
+clim <- as.numeric(tapply(precip_pi$value, md, mean))
+length(clim)
+```
+
+## Demanda garantia, capacidade garantia e área requerida
+
+```{r sizing3}
+# maior demanda constante atendida sem nenhuma falha (m3/dia)
+sapply(c("bisection", "optimize", "step"), function(m)
+  rh_guaranteed_demand(clim, area = area_total, capacity = 400,
+                       runoff = 0.85, efficiency = 1, initial = 400, method = m))
+
+# menor reservatorio que zera o deficit na demanda atual (m3)
+sapply(c("bisection", "optimize", "step"), function(m)
+  rh_guaranteed_capacity(clim, demand = demand, area = area_total,
+                         runoff = 0.85, efficiency = 1, method = m, tol = 1))
+
+# menor area que zera o deficit com 2000 m3 de reservatorio (m2)
+sapply(c("bisection", "optimize", "step"), function(m)
+  rh_required_area(clim, demand = demand, capacity = 2000,
+                   runoff = 0.85, efficiency = 1, method = m, tol = 1))
+```
+
+Em séries diárias reais, com estiagens longas, aumentar só a área pode não zerar
+o déficit se a capacidade não atravessa a seca, pois em dia sem chuva não há
+captação, qualquer que seja o telhado. Na climatologia, suave, a área basta.
+
+## Meta de garantia arbitrária
+
+Exigir 100% costuma custar caro demais. A função `rh_size_for()` resolve a
+pergunta prática "quanto preciso para atingir $\alpha$ por cento?" para qualquer
+alavanca e qualquer das duas métricas, pela mesma bisseção, agora sobre
+$G(x) = \alpha$:
+
+```{r sizefor}
+rh_size_for(precip_pi$value,
+            base = list(demand = demand, area = area_total,
+                        runoff = 0.85, efficiency = 1),
+            vary = "capacity", target_value = 90,
+            dates = precip_pi$date, climatology = TRUE)
+```
+
+# Curvas de decisão
+
+## Varredura de uma alavanca
+
+A função `rh_sweep()` mostra como a garantia reage a uma alavanca. A forma é
+sempre a mesma, de ganhos decrescentes: o primeiro m³ de tanque vale muito e o
+milésimo quase nada, porque o limite passa a ser a captação.
+
+```{r sweep}
+rh_sweep(precip_pi$value,
+         base = list(demand = demand, area = area_total,
+                     runoff = 0.85, efficiency = 1),
+         param = "capacity", values = seq(100, 1000, by = 100),
+         metrics = c("attendance_pct", "reliability_pct"),
+         dates = precip_pi$date, climatology = TRUE)
+```
+
+## Superfície de trade-off entre telhado e tanque
+
+A função `rh_grid()` varre duas alavancas e devolve a superfície $G(A, V)$, e
+`rh_plot_tradeoff()` a desenha como mapa de calor com curvas de nível de
+iso-garantia. Cada ponto do plano é um projeto possível, com área no eixo x e
+capacidade no y, e a cor é a garantia desse projeto. As linhas brancas ligam
+projetos de mesma garantia, de modo que a linha de 90 é o conjunto de todas as
+combinações de telhado e tanque que entregam 90%. A partir do projeto atual,
+observa-se qual movimento cruza a curva-alvo antes, para a direita ampliando o
+telhado ou para cima ampliando o tanque. Contornos quase verticais indicam que
+só a área resolve, quase horizontais que só o tanque resolve, e o espaçamento
+entre contornos mede o rendimento marginal.
+
+```{r tradeoff, fig.cap = "Superfície de garantia de área contra capacidade, demanda fixa, com curvas de iso-garantia."}
+g <- rh_grid(precip_pi$value,
+             base = list(demand = demand, runoff = 0.85, efficiency = 1),
+             x = "area", x_values = seq(800, 8000, length.out = 20),
+             y = "capacity", y_values = seq(100, 1500, length.out = 20),
+             metrics = "attendance_pct",
+             dates = precip_pi$date, climatology = TRUE)
+rh_plot_tradeoff(g, breaks = c(60, 70, 80, 90, 100))
+```
+
+No IFPB-PI os contornos são quase verticais na região do projeto atual, ou seja,
+o sistema é limitado por captação, e ampliar o telhado rende mais que ampliar o
+tanque, a mesma conclusão do estudo de 2024.
+
+## Qual alavanca compensa mais
+
+A função `rh_plot_levers()` aplica perturbações padronizadas a partir do ponto
+de operação, mais 25% de área, mais 25% de capacidade e menos 10% de demanda,
+uma de cada vez, e compara a garantia resultante com a linha de base tracejada.
+É a versão em derivada discreta da superfície anterior.
+
+```{r levers, fig.cap = "Efeito isolado de cada alavanca sobre o atendimento, a partir do projeto atual."}
+rh_plot_levers(precip_pi$value,
+               base = list(demand = demand, area = area_total, capacity = 400,
+                           runoff = 0.85, efficiency = 1),
+               dates = precip_pi$date, climatology = TRUE)
+```
+
+## Curvas Storage-Yield-Reliability
+
+Tradição da hidrologia de reservatórios (McMahon e Adeloye, 2005; Fewkes, 2000),
+essas curvas trazem a garantia no eixo y contra a capacidade no x, com uma curva
+por demanda. Elas são côncavas, saturando quando o tanque deixa de ser o
+gargalo, e deslocam-se para baixo conforme a demanda cresce.
+
+```{r syr, fig.cap = "Curvas SYR: confiabilidade contra capacidade, uma curva por demanda (m³/dia)."}
+gs <- rh_grid(precip_pi$value,
+              base = list(area = area_total, runoff = 0.85, efficiency = 1),
+              x = "capacity", x_values = seq(100, 1500, length.out = 15),
+              y = "demand", y_values = c(3, 5, 7, 9),
+              metrics = "reliability_pct",
+              dates = precip_pi$date, climatology = TRUE)
+rh_plot_syr(gs)
+```
+
+## Fronteira de garantia
+
+Para cada capacidade, a maior demanda atendível sem nenhuma falha, isto é, a
+fronteira que separa projetos viáveis, abaixo da curva, de inviáveis, acima:
+
+```{r frontier}
+rh_guarantee_curve(precip_pi$value,
+                   base = list(area = area_total, runoff = 0.85, efficiency = 1),
+                   vary = "capacity", values = seq(100, 1000, by = 150),
+                   target = "demand",
+                   dates = precip_pi$date, climatology = TRUE)
+```
+
+## Curva de projeto adimensional
+
+Dividindo demanda e capacidade pelo aporte anual médio $Q_{ano}$, a média anual
+de $\sum_t Q_t$, obtêm-se grandezas sem unidade:
+
+$$x = \frac{D \cdot 365}{Q_{ano}} \ \text{(fração de demanda)}, \qquad
+  y = \frac{V}{Q_{ano}} \ \text{(fração de armazenamento)}$$
+
+Sistemas com as mesmas frações comportam-se de modo semelhante mesmo em locais
+diferentes, o que torna o gráfico transferível entre sítios (Fewkes, 2000). Com
+fração de demanda muito menor que 1 a garantia é alta com pouco armazenamento;
+perto de 1, o sistema consome quase todo o aporte e qualquer garantia exige
+armazenamento grande.
+
+```{r design, fig.cap = "Curva de projeto adimensional: garantia em função das frações de demanda e de armazenamento."}
+n_years <- length(unique(format(precip_pi$date, "%Y")))
+inflow  <- sum(rh_available_volume(precip_pi$value, area_total, 0.85, 1)) / n_years
+gd <- rh_grid(precip_pi$value,
+              base = list(area = area_total, runoff = 0.85, efficiency = 1),
+              x = "demand", x_values = seq(2, 12, length.out = 12),
+              y = "capacity", y_values = seq(100, 1500, length.out = 12),
+              metrics = "reliability_pct",
+              dates = precip_pi$date, climatology = TRUE)
+rh_plot_design_curve(gd, annual_inflow = inflow)
+```
+
+## Curvas de iso-garantia, análogo da cota-área-volume
+
+Na hidrologia de reservatórios, a curva cota-área-volume usa a cota como
+variável-espinha que indexa área e volume. Aqui a espinha é a garantia.
+
+Na primeira forma, para cada área $A$ do eixo x e cada nível $\alpha$,
+resolve-se por bisseção a capacidade $V(A;\alpha)$ que entrega exatamente
+$\alpha$ por cento. Cada linha é um nível, e andar sobre a linha troca telhado
+por tanque sem mudar a garantia, sendo a inclinação $|dV/dA|$ a taxa de troca,
+isto é, quantos m³ de tanque um m² de telhado substitui. Linhas mais altas
+correspondem a metas mais exigentes.
+
+```{r iso, fig.cap = "Iso-garantia: capacidade necessária contra área, uma curva por nível de garantia, demanda fixa."}
+iso <- rh_iso_curve(precip_pi$value,
+                    base = list(demand = demand, runoff = 0.85, efficiency = 1),
+                    x = "area", x_values = seq(1000, 7000, length.out = 12),
+                    y = "capacity", levels = c(70, 80, 90, 100),
+                    dates = precip_pi$date, climatology = TRUE)
+rh_plot_iso(iso)
+```
+
+A segunda forma é o análogo mais direto da cota-área-volume: garantia no eixo x
+e, para cada nível, a capacidade requerida no eixo esquerdo e a área requerida
+no direito, cada uma calculada mantendo o resto no ponto de operação atual.
+Escolhida a meta, leem-se os dois requisitos de uma vez, e a curvatura crescente
+mostra o custo marginal explosivo de perseguir 100%.
+
+```{r resource, fig.cap = "Capacidade e área requeridas em função da meta de garantia, demais parâmetros fixos no projeto atual."}
+rc <- rh_resource_curve(precip_pi$value,
+        base = list(demand = demand, area = area_total, capacity = 400,
+                    runoff = 0.85, efficiency = 1),
+        levels = seq(50, 100, by = 5),
+        dates = precip_pi$date, climatology = TRUE)
+rh_plot_resource_curve(rc)
+```
+
+# Cenários
+
+Cenários são recortes ou transformações da série que o usuário monta livremente,
+fora do conjunto de funções do pacote. Seguem três exemplos.
+
+## Demanda sazonal
+
+A demanda raramente é constante, variando com férias e estação quente. Um perfil
+mensal de 12 valores em m³/dia vira vetor diário com `rh_seasonal_demand()` e
+entra direto no motor:
+
+```{r seasonal}
+dem_mensal  <- rh_seasonal_demand(c(7, 7, 6, 6, 5, 5, 5, 6, 7, 7, 7, 7),
+                                  precip_pi$date)
+sim_sazonal <- rh_simulate(precip_pi$value, dem_mensal, area_total, 400,
+                           runoff = 0.85, efficiency = 1)
+```
+
+## Sequências de estresse
+
+Reordenando os anos inteiros do mais seco para o mais úmido, com
+`order = "increasing"`, cria-se um pior caso de partida, em que o sistema
+enfrenta as megassecas em sequência, sem anos úmidos intercalados para recompor
+o estoque:
+
+```{r stress}
+seco_primeiro <- rh_scenarios_from_years(precip_pi, order = "increasing")
+sim_estresse  <- rh_simulate(seco_primeiro$value, demand, area_total, 400,
+                             runoff = 0.85, efficiency = 1)
+```
+
+## Comparação
+
+```{r compare}
+rh_compare(list(cronologico = sim_full,
+                sazonal     = sim_sazonal,
+                estresse    = sim_estresse))[
+  , c("name", "attendance_pct", "reliability_pct", "deficit_total")]
+```
+
+A série de estresse muda pouco os totais, já que são os mesmos dias em outra
+ordem e, com $V$ muito menor que o déficit anual, o agregado volumétrico é
+dominado pela soma das chuvas, mas concentra as falhas. A demanda sazonal alivia
+a estiagem se o perfil acompanhar a disponibilidade.
+
+## Volume aproveitável por bloco
+
+O volume aproveitável cresce com a área de captação, base para decidir quais
+telhados conectar primeiro:
+
+```{r perblock, fig.cap = "Volume aproveitável médio anual por bloco."}
+per_block <- data.frame(
+  bloco = areas_pi$block,
+  area_m2 = areas_pi$area_m2,
+  aproveitavel_m3_ano = vapply(areas_pi$area_m2, function(a)
+    rh_simulate(precip_pi$value, demand, a, 400, runoff = 0.85,
+                efficiency = 1)$summary$usable_volume / n_years, numeric(1))
+)
+per_block
+
+ggplot(per_block,
+       aes(reorder(bloco, aproveitavel_m3_ano), aproveitavel_m3_ano,
+           fill = aproveitavel_m3_ano)) +
+  geom_col() + coord_flip() +
+  labs(x = NULL, y = "Volume aproveitável (m³/ano)", fill = "m³/ano") +
+  theme_minimal()
+```
+
+# Exploração interativa
+
+O que este documento faz em código pode ser explorado com sliders no app Shiny
+do pacote, que expõe área, capacidade, demanda, coeficientes, métrica e modo
+rápido:
+
+```{r app, eval = FALSE}
+rharv::rh_explore()
+```
+
+# Referências
+
+* Silva, R. M. V. da et al. (2024). *Avaliação do potencial de aproveitamento
+  de água de chuva usando técnicas de modelagem hidrológica: estudo de caso do
+  campus IFPB-PI.* XVII SRHNE, João Pessoa-PB. ABRHidro.
+* Souza, T. J. (2015). *Potencial de aproveitamento de água de chuva no meio
+  urbano: o caso de Campina Grande, PB.* UFCG.
+* ABNT NBR 15527:2007 e 15527:2019. *Aproveitamento de água de chuva de
+  coberturas para fins não potáveis.*
+* Jenkins, D.; Pearson, F.; Moore, E.; Sun, J. K.; Valentine, R. (1978).
+  *Feasibility of rainwater collection systems in California.* University of
+  California.
+* Fewkes, A.; Butler, D. (2000). Simulating the performance of rainwater
+  collection and reuse systems using behavioural models. *Building Services
+  Engineering Research and Technology*, 21(2), 99 a 106.
+* Mitchell, V. G. (2007). How important is the selection of computational
+  analysis method to the accuracy of rainwater tank behaviour modelling?
+  *Hydrological Processes*, 21(21), 2850 a 2861.
+* McMahon, T. A.; Adeloye, A. J. (2005). *Water Resources Yield.* Water
+  Resources Publications.
+
+# Ambiente
+
+```{r session}
+sessionInfo()
+```
